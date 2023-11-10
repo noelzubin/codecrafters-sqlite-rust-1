@@ -2,9 +2,9 @@
 peg::parser! {
     grammar sql_parser() for str {
         pub rule select_statement() -> Sql
-            = "SELECT" ws()
+            = kw("SELECT") ws()
             select_clause:select_clause() ws()
-            "FROM" ws()
+            kw("FROM") ws()
             table: identifier()
             where_clause:optional_where_clause()?
             { Sql { select_clause, table, where_clause } }
@@ -23,7 +23,7 @@ peg::parser! {
             "'" value:$([^'\'']*) "'" { value.to_owned() }
 
         rule optional_where_clause() -> (String, String) =
-            ws() "WHERE" ws() key:identifier() wsz() "=" wsz() value:quoted_string() { (key.to_owned(), value.to_owned()) }
+            ws() kw("WHERE") ws() key:identifier() wsz() "=" wsz() value:quoted_string() { (key.to_owned(), value.to_owned()) }
 
         rule identifier() -> String =
             s:$(['a'..='z' | 'A'..='Z' | '_']+) { s.to_owned() }
@@ -31,6 +31,10 @@ peg::parser! {
         rule ws() = quiet!{[' ' | '\t']+}
 
         rule wsz() = quiet!{[' ' | '\t']*}
+
+        rule kw(kw: &'static str) -> () =
+            input:$([_]*<{kw.len()}>)
+            {? if input.eq_ignore_ascii_case(kw) { Ok(()) } else { Err(kw) } }
     }
 }
 
@@ -87,6 +91,17 @@ mod tests {
             ),
             TestCase(
                 "SELECT one, two FROM apples",
+                Sql {
+                    select_clause: SelectClause::Columns(vec![
+                        "one".to_string(),
+                        "two".to_string(),
+                    ]),
+                    table: "apples".to_owned(),
+                    where_clause: None,
+                },
+            ),
+            TestCase(
+                "select one, two fRoM apples",
                 Sql {
                     select_clause: SelectClause::Columns(vec![
                         "one".to_string(),
