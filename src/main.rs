@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
-use std::fs::File;
-use std::io::prelude::*;
+use std::fs;
+mod page;
+
 
 fn main() -> Result<()> {
     // Parse arguments
@@ -15,16 +16,14 @@ fn main() -> Result<()> {
     let command = &args[2];
     match command.as_str() {
         ".dbinfo" => {
-            let mut file = File::open(&args[1])?;
-            let mut header = [0; 100];
-            file.read_exact(&mut header)?;
+            // Read database into file
+            let database: Vec<u8> = fs::read(&args[1])?;
 
-            // The page size is stored at the 16th byte offset, using 2 bytes in big-endian order
-            #[allow(unused_variables)]
-            let page_size = u16::from_be_bytes([header[16], header[17]]);
+            let page_size = u16::from_be_bytes([database[16], database[17]]);
+            let page_header = page::get_page_header(&database[100..])?;
             
-            // Uncomment this block to pass the first stage
             println!("database page size: {}", page_size);
+            println!("number of tables: {}", page_header.number_of_cells);
         }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
