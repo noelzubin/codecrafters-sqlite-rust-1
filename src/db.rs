@@ -357,7 +357,7 @@ impl DB {
                 }
             }
             SelectClause::FunctionCall(function_name) => {
-                if function_name == "COUNT" {
+                if function_name.eq_ignore_ascii_case("COUNT") {
                     println!("{}", records.len());
                 }
             }
