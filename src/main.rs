@@ -41,8 +41,7 @@ fn main() -> Result<()> {
 
         query => {
             let query = select_sql::parse_sql(query)?;
-            let resp = db.process_query(query, &database)?;
-            println!("{}", resp);
+            db.process_query(query, &database)?;
         }
     }
 

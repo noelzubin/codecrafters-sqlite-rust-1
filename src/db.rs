@@ -303,7 +303,7 @@ impl DB {
         Self { page_size, schemas }
     }
 
-    pub fn process_query(&self, query: Sql, database: &Vec<u8>) -> Result<String> {
+    pub fn process_query(&self, query: Sql, database: &Vec<u8>) -> Result<()> {
         // Store whether IndexInfo if you can use one for the query
         let mut idx_info: Option<IndexInfo> = None;
 
@@ -363,7 +363,7 @@ impl DB {
             }
         }
 
-        return Ok(String::from("DONE"));
+        return Ok(());
     }
 
     // Get all records from a schema.
