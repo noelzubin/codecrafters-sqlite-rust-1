@@ -1,7 +1,10 @@
-use std::{vec, collections::HashMap};
+use std::{
+    collections::{HashMap, HashSet},
+    vec,
+};
 
 use crate::{
-    creation_sql::{parse_create_index, parse_creation, IndexInfo, Field},
+    creation_sql::{parse_create_index, parse_creation, Field, IndexInfo},
     header::{BTreePage, PageHeader},
     record::parse_record,
     schema::Schema,
@@ -70,7 +73,10 @@ pub fn get_page_size(database: &Vec<u8>) -> Result<u16> {
     return Ok(page_size);
 }
 
-pub fn get_fields_in_table(tablename: &str, database: &Vec<u8>) -> Result<HashMap<String, (usize, Field)>> {
+pub fn get_fields_in_table(
+    tablename: &str,
+    database: &Vec<u8>,
+) -> Result<HashMap<String, (usize, Field)>> {
     let page_header = get_page_header(&database[100..108])?;
     let schemas = parse_schemas(&database, page_header.number_of_cells)?;
 
@@ -120,8 +126,6 @@ fn parse_page(
         // get the index cell pointers
         parse_cell_pointers(&database[(start_index + 12)..], page_header.number_of_cells);
 
-        let mut found_bigger = false;
-
         for cell_pointer in cell_pointers.iter() {
             let left_child_pointer_start = start_index + *cell_pointer as usize;
 
@@ -136,35 +140,24 @@ fn parse_page(
                 parse_varint(&database[(left_child_pointer_start + offset)..]);
             offset += payload_offset;
 
-
             let record = parse_record(&database[(left_child_pointer_start + offset)..]).unwrap();
 
             let key = String::from_utf8_lossy(&record[0]);
 
-            if value <= &key {
-                if found_bigger {
-                    return Ok(());
-                }
-
-                if value == key {
-                    let rowid = record[1].clone();
-                    let rowid = parse_24bit_be_twos_complement(&rowid);
-                    row_collector.push(rowid as usize);
-                } else {
-                    found_bigger = true;
-                }
-
-                parse_page(
-                    page_size,
-                    left_child_pointer as usize,
-                    database,
-                    row_collector,
-                )
-                .unwrap();
+            if value == key {
+                let rowid = record[1].clone();
+                let rowid = parse_24bit_be_twos_complement(&rowid);
+                row_collector.push(rowid as usize);
             }
-        }
 
-        let right_most_pointer = page_header.right_most_pointer.unwrap();
+            parse_page(
+                page_size,
+                left_child_pointer as usize,
+                database,
+                row_collector,
+            )
+            .unwrap();
+        }
 
         parse_page(
             page_size,
@@ -172,7 +165,7 @@ fn parse_page(
             database,
             row_collector,
         )
-        .unwrap();
+        .expect("Surely there is a right most pointer");
 
         return Ok(());
     }
@@ -185,15 +178,9 @@ fn parse_page(
 
             let stream = &database[cell_pointer_start as usize..];
 
-            // Differently from an interior page, there's no pointer.
-
-            //
-
             let key_record = parse_index_payload(stream)?;
 
             let key = &key_record[0];
-
-            // warn!("checking {} ", String::from_utf8_lossy(key));
 
             if key == value.as_bytes() {
                 let rowid = key_record[1].clone();
@@ -247,7 +234,7 @@ fn get_them_records(database: &Vec<u8>, page_size: usize, page_number: usize) ->
 
     // If it is an interior table. the content of the cell pointer are pointers to the left pages
     if page_header.page_type == BTreePage::InteriorTable {
-        return cell_pointers
+        let mut records: Vec<Record> = cell_pointers
             .iter()
             .map(|cell_pointer| {
                 let left_child_pointer_start = start_index + *cell_pointer as usize;
@@ -260,7 +247,12 @@ fn get_them_records(database: &Vec<u8>, page_size: usize, page_number: usize) ->
             })
             .flatten()
             .collect();
+            
+        records.extend(get_them_records(database, page_size, page_header.right_most_pointer.unwrap() as usize));
+
+        return records
     }
+
 
     // If it is a leaf page. get the records directly
     if page_header.page_type == BTreePage::LeafTable {
@@ -274,10 +266,10 @@ fn get_them_records(database: &Vec<u8>, page_size: usize, page_number: usize) ->
                 // Now the actual content start
                 let record = parse_record(&stream[offset + read_bytes..]).unwrap();
 
-                let record : Vec<String> = record.iter().map(|value| {
-                    String::from_utf8_lossy(value).into()
-                }).collect();
-
+                let record: Vec<String> = record
+                    .iter()
+                    .map(|value| String::from_utf8_lossy(value).into())
+                    .collect();
 
                 Record {
                     row_id: row_id.to_string(),
@@ -299,12 +291,14 @@ pub struct DB {
 
 pub struct Record {
     row_id: String,
-    columns: Vec<String>
+    columns: Vec<String>,
 }
 
+// If the column is an INTEGER PRIMARY KEY then its values will be NULL in the
+// fields and should be picked from row_id.
 fn get_value_for_record(record: &Record, ind: usize, field: &Field) -> String {
     if field.is_primary_key {
-        return record.row_id.clone()
+        return record.row_id.clone();
     }
 
     return record.columns[ind].clone();
@@ -322,6 +316,7 @@ impl DB {
         // If there is a where clause. See if you can use the index.
         if let Some((key, _)) = query.where_clause.clone() {
             // See if you can find a index;
+
             let index_schema = self
                 .schemas
                 .iter()
@@ -335,27 +330,39 @@ impl DB {
             }
         }
 
+        let fields = get_fields_in_table(&query.table, database)?;
+
         let records = if let Some(index_info) = idx_info {
-            self.get_records_using_index(database, index_info)?
+            let records = self.get_records_for_schema(&query.table, database)?;
+            let row_ids = self.get_records_using_index(database, index_info)?;
+            
+            let row_ids: HashSet<String, std::collections::hash_map::RandomState> =
+                HashSet::from_iter(row_ids.into_iter().map(|r| r.to_string()));
+            let records = records
+                .into_iter()
+                .filter(|record| row_ids.contains(&record.row_id))
+                .collect();
+            records
         } else {
-            self.get_records_for_schema(&query.table, database)?
+            let mut records = self.get_records_for_schema(&query.table, database)?;
+
+            //  filter by where clause
+            if let Some((k, v)) = &query.where_clause {
+                records = records
+                    .into_iter()
+                    .filter(|record| {
+                        let (ind, field) = &fields[k];
+                        let value = get_value_for_record(record, *ind, field);
+                        value == *v
+                    })
+                    .collect();
+            };
+
+            records
         };
 
         match query.select_clause {
             SelectClause::Columns(columns) => {
-                let fields = get_fields_in_table(&query.table, database)?;
-
-                // let indexes: Vec<usize> = columns
-                //     .iter()
-                //     .map(|col| {
-                //         fields
-                //             .iter()
-                //             .find_position(|field| field == &col)
-                //             .unwrap()
-                //             .0
-                //     })
-                //     .collect();
-
                 for record in records.iter() {
                     if let Some((k, v)) = &query.where_clause {
                         let (ind, field) = &fields[k];
@@ -365,15 +372,19 @@ impl DB {
                         }
                     }
 
-                    let resp = columns.iter().map(|col| {
-                        let (ind, field) = &fields[col];
-                        get_value_for_record(record, *ind, field)
-                    }).join("|");
+                    let resp = columns
+                        .iter()
+                        .map(|col| {
+                            let (ind, field) = &fields[col];
+                            get_value_for_record(record, *ind, field)
+                        })
+                        .join("|");
 
                     println!("{}", resp);
                 }
             }
             SelectClause::FunctionCall(function_name) => {
+                // FIXME: Filter shuold happend here as well.
                 if function_name.eq_ignore_ascii_case("COUNT") {
                     println!("{}", records.len());
                 }
@@ -400,11 +411,12 @@ impl DB {
 
         return Ok(records);
     }
+
     pub fn get_records_using_index(
         &self,
         database: &Vec<u8>,
         index_info: IndexInfo,
-    ) -> Result<Vec<Record>> {
+    ) -> Result<Vec<usize>> {
         // Get index schema
         let schema = self
             .schemas
@@ -423,10 +435,6 @@ impl DB {
             &mut row_ids,
         )?;
 
-        // TODO:
-        // Ideally now that you have all the rowids, you can get the records from the table by binary searching
-        // since the cellpointers are ordered by rowid. skipping that for now.
-
-        return Ok(vec![]);
+        return Ok(row_ids);
     }
 }
