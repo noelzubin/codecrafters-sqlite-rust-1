@@ -1,7 +1,7 @@
-use std::vec;
+use std::{vec, collections::HashMap};
 
 use crate::{
-    creation_sql::{parse_create_index, parse_creation, IndexInfo},
+    creation_sql::{parse_create_index, parse_creation, IndexInfo, Field},
     header::{BTreePage, PageHeader},
     record::parse_record,
     schema::Schema,
@@ -70,7 +70,7 @@ pub fn get_page_size(database: &Vec<u8>) -> Result<u16> {
     return Ok(page_size);
 }
 
-pub fn get_fields_in_table(tablename: &str, database: &Vec<u8>) -> Result<Vec<String>> {
+pub fn get_fields_in_table(tablename: &str, database: &Vec<u8>) -> Result<HashMap<String, (usize, Field)>> {
     let page_header = get_page_header(&database[100..108])?;
     let schemas = parse_schemas(&database, page_header.number_of_cells)?;
 
@@ -84,7 +84,8 @@ pub fn get_fields_in_table(tablename: &str, database: &Vec<u8>) -> Result<Vec<St
     return Ok(create_statement
         .fields
         .into_iter()
-        .map(|field| field.name)
+        .enumerate()
+        .map(|(ind, field)| (field.name.clone(), (ind, field)))
         .collect());
 }
 
@@ -227,7 +228,7 @@ fn parse_24bit_be_twos_complement(bytes: &[u8]) -> i64 {
 }
 
 // Get records from the given page.
-fn get_them_records(database: &Vec<u8>, page_size: usize, page_number: usize) -> Vec<Vec<String>> {
+fn get_them_records(database: &Vec<u8>, page_size: usize, page_number: usize) -> Vec<Record> {
     // Start index of the page
     let mut start_index = page_size * (page_number - 1);
 
@@ -268,24 +269,22 @@ fn get_them_records(database: &Vec<u8>, page_size: usize, page_number: usize) ->
             .map(|cell_pointer| {
                 let stream = &database[(start_index + cell_pointer as usize)..];
                 let (_payload_size, offset) = parse_varint(stream); // total number of bytes of payload
-                let (_rowid, read_bytes) = parse_varint(&stream[offset..]); // integer key (rowid).
+                let (row_id, read_bytes) = parse_varint(&stream[offset..]); // integer key (rowid).
 
                 // Now the actual content start
-                let record = parse_record(&stream[offset + read_bytes..]);
+                let record = parse_record(&stream[offset + read_bytes..]).unwrap();
 
-                record
-            })
-            .collect::<Result<Vec<_>>>();
+                let record : Vec<String> = record.iter().map(|value| {
+                    String::from_utf8_lossy(value).into()
+                }).collect();
 
-        let records: Vec<Vec<String>> = records
-            .unwrap()
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|value| String::from_utf8_lossy(value).into())
-                    .collect()
+
+                Record {
+                    row_id: row_id.to_string(),
+                    columns: record,
+                }
             })
-            .collect();
+            .collect::<Vec<Record>>();
 
         return records;
     }
@@ -296,6 +295,19 @@ fn get_them_records(database: &Vec<u8>, page_size: usize, page_number: usize) ->
 pub struct DB {
     pub page_size: u16,
     pub schemas: Vec<Schema>,
+}
+
+pub struct Record {
+    row_id: String,
+    columns: Vec<String>
+}
+
+fn get_value_for_record(record: &Record, ind: usize, field: &Field) -> String {
+    if field.is_primary_key {
+        return record.row_id.clone()
+    }
+
+    return record.columns[ind].clone();
 }
 
 impl DB {
@@ -333,26 +345,31 @@ impl DB {
             SelectClause::Columns(columns) => {
                 let fields = get_fields_in_table(&query.table, database)?;
 
-                let indexes: Vec<usize> = columns
-                    .iter()
-                    .map(|col| {
-                        fields
-                            .iter()
-                            .find_position(|field| field == &col)
-                            .unwrap()
-                            .0
-                    })
-                    .collect();
+                // let indexes: Vec<usize> = columns
+                //     .iter()
+                //     .map(|col| {
+                //         fields
+                //             .iter()
+                //             .find_position(|field| field == &col)
+                //             .unwrap()
+                //             .0
+                //     })
+                //     .collect();
 
-                for record in records {
+                for record in records.iter() {
                     if let Some((k, v)) = &query.where_clause {
-                        let k_index = fields.iter().find_position(|field| *field == k).unwrap().0;
-                        if record[k_index] != *v {
+                        let (ind, field) = &fields[k];
+                        let value = get_value_for_record(record, *ind, field);
+                        if value != *v {
                             continue;
                         }
                     }
 
-                    let resp = indexes.iter().map(|i| record[*i].clone()).join("|");
+                    let resp = columns.iter().map(|col| {
+                        let (ind, field) = &fields[col];
+                        get_value_for_record(record, *ind, field)
+                    }).join("|");
+
                     println!("{}", resp);
                 }
             }
@@ -371,7 +388,7 @@ impl DB {
         &self,
         tablename: &str,
         database: &Vec<u8>,
-    ) -> Result<Vec<Vec<String>>> {
+    ) -> Result<Vec<Record>> {
         let schema = self
             .schemas
             .iter()
@@ -387,7 +404,7 @@ impl DB {
         &self,
         database: &Vec<u8>,
         index_info: IndexInfo,
-    ) -> Result<Vec<Vec<String>>> {
+    ) -> Result<Vec<Record>> {
         // Get index schema
         let schema = self
             .schemas

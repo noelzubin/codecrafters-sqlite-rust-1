@@ -99,24 +99,26 @@ fn field_specification_list(input: &[u8]) -> IResult<&[u8], Vec<Field>> {
 }
 
 fn field_specification(input: &[u8]) -> IResult<&[u8], Field> {
-    let (remaining_input, (column, _, _, _)) = tuple((
+    let (remaining_input, (column, _, constraints, _)) = tuple((
         identifier,
         opt(delimited(multispace0, alphanumeric1, multispace0)), // type
         many0(column_constraint),
         opt(delimited(multispace0, tag(","), multispace0)),
     ))(input)?;
 
-    Ok((remaining_input, Field { name: column }))
+    Ok((remaining_input, Field { name: column, is_primary_key: constraints.contains(&"PRIMARY KEY".to_string()) }))
 }
 
-fn column_constraint(input: &[u8]) -> IResult<&[u8], &[u8]> {
+fn column_constraint(input: &[u8]) -> IResult<&[u8], String> {
     let not_null = delimited(multispace0, tag_no_case("NOT NULL"), multispace0);
 
     let auto_increment = delimited(multispace0, tag_no_case("AUTOINCREMENT"), multispace0);
 
     let primary_key = delimited(multispace0, tag_no_case("PRIMARY KEY"), multispace0);
 
-    alt((not_null, auto_increment, primary_key))(input)
+    let (input, constraint) = alt((not_null, auto_increment, primary_key))(input)?;
+
+    Ok((input, String::from_utf8(constraint.into()).unwrap().to_ascii_uppercase()))
 }
 
 
@@ -125,6 +127,7 @@ fn column_constraint(input: &[u8]) -> IResult<&[u8], &[u8]> {
 
 pub struct Field {
     pub name: String,
+    pub is_primary_key: bool,
 }
 
 #[derive(Debug, PartialEq)]
