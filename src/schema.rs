@@ -1,12 +1,14 @@
 use anyhow::Result;
 use anyhow::Error;
 
+use crate::db::parse_24bit_be_twos_complement;
+
 #[derive(Debug)]
 pub struct Schema {
     pub kind: String,
     pub name: String,
     pub table_name: String,
-    pub root_page: u8,
+    pub root_page: i64,
     pub sql: String,
 }
 
@@ -22,11 +24,12 @@ impl Schema {
     //   sql text
     // );
     pub fn parse_return_option(record: Vec<Vec<u8>>) -> Option<Self> {
+        // dbg!(&record);
         let mut items = record.into_iter();
         let kind = items.next()?;
         let name = items.next()?;
         let table_name = items.next()?;
-        let root_page = *items.next()?.get(0)?;
+        let root_page: i64 = parse_24bit_be_twos_complement(&items.next()?);
         let sql = items.next()?;
 
         let schema = Self {
