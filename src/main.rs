@@ -1,10 +1,20 @@
 use anyhow::{bail, Result};
 use itertools::Itertools;
-use sqlite_starter_rust::db::{get_page_header, parse_schemas,  DB};
+use sqlite_starter_rust::db::{get_page_header, parse_schemas, DB};
 use sqlite_starter_rust::select_sql;
+use sqlite_starter_rust::util;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::prelude::*;
+
+fn get_page_size(file: &mut File) -> Result<u16> {
+    //read first 100 bytes from file
+    let mut buffer = [0; 100];
+    file.read_exact(&mut buffer)?;
+    //get page size
+    let page_size = u16::from_be_bytes(TryInto::<[u8; 2]>::try_into(&buffer[16..18]).unwrap());
+    Ok(page_size)
+}
 
 fn main() -> Result<()> {
     // Parse arguments
@@ -17,17 +27,17 @@ fn main() -> Result<()> {
 
     // Read database file into database
     let mut file = File::open(&args[1])?;
-    let mut database = Vec::new();
-    file.read_to_end(&mut database)?;
+
+    let page_size = get_page_size(&mut file)?;
+    let first_page = util::read_page(&file, page_size, 1)?;
 
     // Parse command and act accordingly
     let command = &args[2];
 
-    // On first page first 100 bytes are database header 
-    let page_header = get_page_header(&database[100..])?;
-    let schemas = parse_schemas(&database, page_header.number_of_cells)?;
-    let page_size = u16::from_be_bytes(TryInto::<[u8; 2]>::try_into(&database[16..18]).unwrap());
-    let db = DB::new(page_size, schemas);
+    // On first page first 100 bytes are database header
+    let page_header = get_page_header(&first_page[100..])?;
+    let schemas = parse_schemas(&first_page, page_header.number_of_cells)?;
+    let db = DB::new(page_size, schemas, file);
 
     match command.as_str() {
         ".dbinfo" => {
@@ -41,7 +51,7 @@ fn main() -> Result<()> {
 
         query => {
             let query = select_sql::parse_sql(query)?;
-            db.process_query(query, &database)?;
+            db.process_query(query)?;
         }
     }
 

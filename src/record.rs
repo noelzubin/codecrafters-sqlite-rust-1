@@ -40,7 +40,10 @@ fn parse_column_value(stream: &[u8], serial_type: usize) -> Result<Vec<u8>> {
         9 => vec![1],
         // Text encoding
         n if serial_type >= 13 && serial_type % 2 == 1 => {
-            let n_bytes = (n - 13) / 2;
+            let mut n_bytes = (n - 13) / 2;
+            if stream.len() < n_bytes as usize {
+                n_bytes = stream.len() as usize;
+            }
             let bytes = stream[0..n_bytes as usize].to_vec();
             bytes
         }

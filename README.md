@@ -76,6 +76,3 @@ download them by running this script:
 If the script doesn't work for some reason, you can download the databases
 directly from
 [codecrafters-io/sample-sqlite-databases](https://github.com/codecrafters-io/sample-sqlite-databases).
-
-## TODO
-[ ] speed up index.
