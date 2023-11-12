@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs::File,
     vec,
 };
@@ -11,7 +11,7 @@ use crate::{
     schema::Schema,
     select_sql::{SelectClause, Sql},
     util,
-    varint::{self, parse_varint},
+    varint::parse_varint,
 };
 use anyhow::Result;
 use itertools::Itertools;
